@@ -116,6 +116,8 @@ Actions are `{ type: "speak", text }`, `{ type: "silence", ms }`, or `{ type: "h
 
 ### Discord mode
 
+Full one-time setup guide (creating the tester bot in the Discord developer portal, inviting it, finding the IDs, common gotchas): see [`docs/discord-setup.md`](./docs/discord-setup.md).
+
 ```sh
 DISCORD_TESTER_TOKEN=Bot.your_tester_bot_token bunx @absolutejs/voice-tester \
   --mode discord \
