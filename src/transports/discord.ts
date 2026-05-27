@@ -59,19 +59,35 @@ export type DiscordVoiceTransportOptions = {
 };
 
 const DISCORD_SAMPLE_RATE = 48000;
-const DISCORD_FRAME_SIZE = 960; // 20 ms @ 48 kHz mono
+const DISCORD_FRAME_SIZE = 960; // 20 ms @ 48 kHz mono (decoded inbound side)
 
-// Drive @discordjs/voice from a Readable. We push raw 16-bit PCM @ 48 kHz
-// mono and StreamType.Raw lets the library handle resampling/encoding.
+/**
+ * Drive @discordjs/voice from a Readable.
+ *
+ * `StreamType.Raw` in @discordjs/voice expects **stereo 48 kHz 16-bit LE PCM**
+ * (signed). Our TTS (`auraSpeak`) produces **mono** PCM at the transport's
+ * sampleRateHz (48 kHz here), so we duplicate every sample into L + R
+ * interleaved before pushing — otherwise the player misinterprets every pair
+ * of mono samples as one stereo frame and the receiving side hears garbage
+ * at 2× speed. Verified live: a Deal Referee with `EndBehaviorType.AfterSilence`
+ * + a `channels: 2` OpusDecoder receives audio_progress frames but produces
+ * NO transcript when fed mono-as-stereo audio; upmixing fixes it.
+ */
 class PcmPushable extends Readable {
 	private finished = false;
 	_read() {
 		/* push happens externally via `pushSamples` */
 	}
-	pushSamples(samples: Int16Array) {
+	pushSamples(monoSamples: Int16Array) {
 		if (this.finished) return;
+		const stereo = new Int16Array(monoSamples.length * 2);
+		for (let i = 0; i < monoSamples.length; i += 1) {
+			const sample = monoSamples[i] ?? 0;
+			stereo[i * 2] = sample; // L
+			stereo[i * 2 + 1] = sample; // R
+		}
 		this.push(
-			Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength),
+			Buffer.from(stereo.buffer, stereo.byteOffset, stereo.byteLength),
 		);
 	}
 	endStream() {
