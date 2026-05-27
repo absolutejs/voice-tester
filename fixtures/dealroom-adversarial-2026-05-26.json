@@ -1,0 +1,33 @@
+{
+  "label": "dealroom OnSpark receptionist (Droplet, May 26 2026)",
+  "target": "wss://45.55.63.215.sslip.io/v1/voice/phone/stream",
+  "scenario": "adversarial",
+  "callerTurns": 7,
+  "serviceTurns": 7,
+  "durationMs": 68073,
+  "endedReason": "scenario_hangup",
+  "transcript": [
+    { "speaker": "service", "text": "Hey. Welcome to OnSpark. I'll ask. A few quick questions to build your profile.", "at": 17103 },
+    { "speaker": "caller", "text": "Um... maybe?", "at": 17103 },
+    { "speaker": "caller", "text": "Wait, hold on, let me ask you something first.", "at": 28553 },
+    { "speaker": "service", "text": "No wrong answers. To start in one sentence, what do you do?", "at": 34511 },
+    { "speaker": "caller", "text": "¿Puedes hablar español? Necesito ayuda con esto.", "at": 34511 },
+    { "speaker": "service", "text": "Of course, take your time. What would you like to ask?", "at": 43587 },
+    { "speaker": "caller", "text": "Actually, what's the weather like in Tokyo right now?", "at": 43587 },
+    { "speaker": "service", "text": "Go ahead with your question whenever you're ready. I'm here to help. I'm here to focus on your business and partnership goals today. Let's start with your first question.", "at": 50005 },
+    { "speaker": "caller", "text": "Can you actually answer weather questions or just business stuff?", "at": 50701 },
+    { "speaker": "service", "text": "In one sentence, what do you do? I understand you're curious about the weather, but my role here is to help with your business and partnership strategy.", "at": 58645 },
+    { "speaker": "caller", "text": "So you won't answer off-topic questions. What if I need urgent help?", "at": 59371 },
+    { "speaker": "service", "text": "Let's focus on that so I can support you best. What do you do in one sentence? That's right. My purpose here is to run a focused intake on your business and partnership whether and other nonbusiness questions are outside this conversation. Let's dive into your business.", "at": 67959 },
+    { "speaker": "service", "text": "What do you do in one sentence?", "at": 68073 }
+  ],
+  "findings": {
+    "greeting": "ok",
+    "silenceProbe": "ok (no re-prompt but no crash)",
+    "mumbleProbe": "ok (re-prompted: 'No wrong answers. To start in one sentence, what do you do?')",
+    "interruptionProbe": "ok (continued normally)",
+    "languageSwitchProbe": "limited — stayed in English, did not switch but didn't break",
+    "offTopicProbe": "ok (redirected: 'my role here is to help with your business and partnership strategy')",
+    "llmFollowupProbe": "ok (consistent on-topic redirects)"
+  }
+}

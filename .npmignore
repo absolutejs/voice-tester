@@ -1,0 +1,8 @@
+src/
+fixtures/
+tsconfig.json
+.gitignore
+.npmignore
+node_modules/
+*.log
+.git/
