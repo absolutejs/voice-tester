@@ -34,10 +34,13 @@ export const auraSpeak = async (
 	if (!trimmed) return new Int16Array(0);
 
 	const target = options.sampleRateHz ?? 8000;
-	// Aura's native 8 kHz path; if the caller asks for a different rate we
-	// request the next one Aura supports and resample. Telephony is always 8k
-	// so this is the hot path.
-	const native = target === 8000 ? 8000 : 16000;
+	// Pick the closest native Aura rate (8 / 16 / 24 / 48 kHz) so we resample
+	// as little as possible. Telephony hot path is 8 kHz, Discord voice is
+	// 48 kHz — both are native, no resampling needed in the common case.
+	const NATIVE_RATES = [8000, 16000, 24000, 48000];
+	const native = NATIVE_RATES.includes(target)
+		? target
+		: (NATIVE_RATES.find((r) => r >= target) ?? 48000);
 	const baseUrl = (tts.baseUrl ?? "https://api.deepgram.com").replace(
 		/\/$/,
 		"",

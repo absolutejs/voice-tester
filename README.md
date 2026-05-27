@@ -110,8 +110,49 @@ Actions are `{ type: "speak", text }`, `{ type: "silence", ms }`, or `{ type: "h
 
 ## Modes
 
-- **ws-direct** (default) — speaks Twilio's protocol against any WS endpoint. Free, no carrier audio path. Tests the full app stack: STT → LLM → TTS → scribe → DB. **Done.**
+- **twilio-ws** (default) — speaks Twilio's protocol against any WS endpoint. Free, no carrier audio path. Tests the full app stack: STT → LLM → TTS → scribe → DB. **Shipped.**
+- **discord** — joins a Discord voice channel as a fake tester user, sends Aura TTS as opus, subscribes to other users' audio receivers, decodes opus back to PCM for STT. Use this to regress Deal Referee / any bot living in a voice channel. **Shipped.** Requires a separate tester Discord bot (with `connect`, `speak` permissions on the channel).
 - **twilio-outbound** (planned) — originates a real Twilio outbound call so the test exercises the carrier audio path. Costs Twilio minutes; gated behind a flag.
+
+### Discord mode
+
+```sh
+DISCORD_TESTER_TOKEN=Bot.your_tester_bot_token bunx @absolutejs/voice-tester \
+  --mode discord \
+  --guild   1234567890 \
+  --channel 9876543210 \
+  --target-user 1122334455 \
+  --scenario adversarial \
+  --duration 90
+```
+
+`--target-user` is optional — if set, the tester only transcribes that user's audio (useful when there are humans in the channel too). Without it, everyone except the tester bot itself is forwarded to STT.
+
+```ts
+import { runScenario } from "@absolutejs/voice-tester";
+import { adversarialScenario } from "@absolutejs/voice-tester/scenarios";
+import { discordVoiceTransport } from "@absolutejs/voice-tester/discord";
+
+const transport = await discordVoiceTransport({
+  token: process.env.DISCORD_TESTER_TOKEN!,
+  guildId: "1234567890",
+  channelId: "9876543210",
+  targetUserId: "1122334455", // optional: only this user's audio
+});
+
+const report = await runScenario({
+  transport,
+  scenario: adversarialScenario({ llm: {} }),
+  tts: { apiKey: process.env.DEEPGRAM_API_KEY! },
+  stt: { apiKey: process.env.DEEPGRAM_API_KEY! },
+});
+```
+
+Discord mode pulls three peer dependencies which are not installed by default — only install them if you actually use Discord mode:
+
+```sh
+bun add -d @discordjs/voice discord.js prism-media
+```
 
 ## Architecture
 

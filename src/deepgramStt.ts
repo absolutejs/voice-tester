@@ -14,6 +14,8 @@ export type DeepgramSttOptions = {
 	language?: string;
 	/** Default `https://api.deepgram.com`. */
 	baseUrl?: string;
+	/** Sample rate of the PCM we'll send (default 8000 for telephony, 48000 for Discord). */
+	sampleRateHz?: number;
 };
 
 export type DeepgramSttEvents = {
@@ -56,7 +58,7 @@ export const openDeepgramStt = (
 		language: options.language ?? "multi",
 		model: options.model ?? "nova-3",
 		punctuate: "true",
-		sample_rate: "8000",
+		sample_rate: String(options.sampleRateHz ?? 8000),
 		smart_format: "true",
 		utterances: "true",
 	});

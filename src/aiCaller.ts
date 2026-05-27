@@ -1,27 +1,26 @@
-// AI-driven caller. Owns the conversation loop:
-//   1. Wait for the service to start speaking (we detect inbound media energy).
-//   2. While the service speaks, accumulate its PCM into the STT WS so we
-//      build a transcript of what the service said.
+// AI-driven caller. Owns the conversation loop end-to-end and is intentionally
+// transport-agnostic: anything that satisfies `Transport` works (Twilio Media
+// Stream, Discord voice, future LiveKit / Zoom Media SDK, …). The engine:
+//   1. Wait for the service to start speaking (detected via inbound media energy).
+//   2. While the service speaks, accumulate PCM into the STT WS so we build
+//      a rolling transcript of what the service said.
 //   3. When the service finishes (mark/clear/silence), hand the rolling
-//      transcript to the LLM with the scenario's `instructions` system prompt.
-//   4. The LLM picks the next action: speak <text>, stay silent for <ms>,
-//      interrupt now, or hang up.
-//   5. Execute the action via the Twilio WS caller; repeat until hang-up or
-//      the scenario timeout.
+//      transcript to the LLM with the scenario's system prompt.
+//   4. The LLM picks the next action: speak <text>, stay silent for <ms>, or hang up.
+//   5. Execute the action via the transport; repeat until hang-up or timeout.
 
 import { auraSpeak, type AuraTTSOptions } from "./auraTTS";
 import { openDeepgramStt, type DeepgramSttOptions } from "./deepgramStt";
+import type { InboundAudioFrame, Transport } from "./transport";
 import {
-	startTwilioWsCaller,
-	type TwilioInboundFrame,
-	type TwilioWsCaller,
-	type TwilioWsCallerOptions,
-} from "./twilioWsCaller";
+	twilioWsTransport,
+	type TwilioWsTransportOptions,
+} from "./transports/twilioWs";
 
 export type CallerActionSpeak = {
 	type: "speak";
 	text: string;
-	/** Override the AI caller's voice for this utterance. */
+	/** Override the AI caller's TTS voice for this utterance. */
 	voice?: string;
 	/** Cut off and barge-in over any in-flight service audio first. */
 	interrupt?: boolean;
@@ -52,7 +51,7 @@ export type ConversationTurn = {
 export type ScenarioContext = {
 	/** Every utterance so far in chronological order. */
 	transcript: ConversationTurn[];
-	/** Total elapsed ms since the WS opened. */
+	/** Total elapsed ms since the transport opened. */
 	elapsedMs: number;
 	/** Most recent service utterance (or null if still waiting on greeting). */
 	lastServiceUtterance: string | null;
@@ -60,14 +59,16 @@ export type ScenarioContext = {
 	callerTurnCount: number;
 };
 
-export type ScenarioDecide = (ctx: ScenarioContext) => Promise<CallerAction> | CallerAction;
+export type ScenarioDecide = (
+	ctx: ScenarioContext,
+) => Promise<CallerAction> | CallerAction;
 
 export type Scenario = {
 	/** Short human label — `happy-path`, `adversarial`, etc. */
 	id: string;
 	/** Hard ceiling on the whole conversation. */
 	maxDurationMs: number;
-	/** Called every time the service finishes an utterance (or after `idleMs` of silence with no service speech). */
+	/** Called when the service finishes an utterance (or after `idleMs` of no service speech). */
 	decide: ScenarioDecide;
 	/** When the service stops emitting media for this long, wake decide() anyway. Default 1500. */
 	idleMs?: number;
@@ -76,36 +77,25 @@ export type Scenario = {
 };
 
 export type RunScenarioOptions = {
-	wsUrl: string;
+	/** Pre-built transport (twilio-ws, discord, your own). */
+	transport: Transport;
 	scenario: Scenario;
 	tts: AuraTTSOptions;
 	stt: DeepgramSttOptions;
-	/** `start.customParameters` Twilio merges into the bridge — usually `sessionId`. */
-	customParameters?: Record<string, string>;
-	/** Caller phone (E.164). Default `+15555550100`. */
-	from?: string;
-	/** Service number (E.164). Default `+19999999999`. */
-	to?: string;
 	/** Optional logger; defaults to console.info. */
 	log?: (line: string) => void;
 };
 
 export type ScenarioReport = {
 	scenario: string;
+	transport: string;
 	transcript: ConversationTurn[];
 	callerTurns: number;
 	serviceTurns: number;
 	durationMs: number;
-	endedReason: "scenario_hangup" | "timeout" | "ws_closed" | "error";
+	endedReason: "scenario_hangup" | "timeout" | "transport_closed" | "error";
 	error?: { message: string };
-	streamSid: string;
 };
-
-// Detect "the service has finished its turn" via two signals:
-//   - a Twilio `clear` event (the service explicitly told us it was done)
-//   - or `idleMs` of zero inbound media frames (heuristic for silence)
-// Either fires, we collect the rolling STT transcript and ask the scenario
-// what to do next.
 
 const SILENCE_THRESHOLD = 200; // PCM samples below this count as silence
 
@@ -126,30 +116,27 @@ export const runScenario = async (
 	let serviceTurnCount = 0;
 	let lastInboundLoudAt = 0;
 	let currentServiceText = "";
-	let endedReason: ScenarioReport["endedReason"] = "ws_closed";
+	let endedReason: ScenarioReport["endedReason"] = "transport_closed";
 	let error: Error | null = null;
+	let mediaFrameCount = 0;
+	let lastMediaLogAt = 0;
 
-	let caller: TwilioWsCaller | null = null;
-	const stt = openDeepgramStt(options.stt);
-	stt.on("open", () => log(`[stt] open`));
+	const transport = options.transport;
+	const sampleRate = transport.sampleRateHz;
+
+	const stt = openDeepgramStt({ ...options.stt, sampleRateHz: sampleRate });
+	stt.on("open", () => log(`[stt] open (rate=${sampleRate}Hz)`));
 	stt.on("close", (code, reason) =>
 		log(`[stt] close code=${code} reason=${reason || "(none)"}`),
 	);
-	stt.on("error", (err) => {
-		log(`[stt] error: ${err.message}`);
-	});
+	stt.on("error", (err) => log(`[stt] error: ${err.message}`));
 	stt.on("partial", (text) => log(`[stt:partial] ${text}`));
 	stt.on("final", (text) => {
 		log(`[stt:final] ${text}`);
-		// Append to the in-flight service-utterance buffer; we treat a clear
-		// (or idle gap) as the boundary, not the STT final alone — services
-		// sometimes finalize mid-thought.
 		currentServiceText = currentServiceText
 			? `${currentServiceText} ${text}`
 			: text;
 	});
-	let mediaFrameCount = 0;
-	let lastMediaLogAt = 0;
 
 	const closeServiceTurn = (reason: "clear" | "idle") => {
 		const text = currentServiceText.trim();
@@ -165,14 +152,7 @@ export const runScenario = async (
 	};
 
 	try {
-		caller = startTwilioWsCaller({
-			customParameters: options.customParameters,
-			from: options.from,
-			to: options.to,
-			wsUrl: options.wsUrl,
-		} satisfies TwilioWsCallerOptions);
-
-		const offFrame = caller.onFrame((frame: TwilioInboundFrame) => {
+		const offFrame = transport.onFrame((frame: InboundAudioFrame) => {
 			if (frame.type === "media") {
 				mediaFrameCount += 1;
 				if (isLoudFrame(frame.pcm)) lastInboundLoudAt = Date.now();
@@ -191,32 +171,24 @@ export const runScenario = async (
 			}
 		});
 
-		await caller.ready;
-		log(`[caller] streamSid=${caller.streamSid} connected`);
+		await transport.ready;
+		log(`[caller] transport=${transport.id} ready (rate=${sampleRate}Hz)`);
 
 		const idleMs = options.scenario.idleMs ?? 1500;
-		// How long to wait for the service to START responding after we speak.
-		// If nothing comes back in this window, we treat the service's response
-		// as "silence" and let the scenario decide what to do next.
 		const responseStartTimeoutMs =
 			options.scenario.responseStartTimeoutMs ?? 8000;
 		const deadline = Date.now() + options.scenario.maxDurationMs;
-
 		const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-		// When we last did anything that moves the conversation forward. We
-		// use this as the floor for the idle-watch so a stale lastInboundLoudAt
-		// from BEFORE our caller utterance doesn't immediately trip "idle".
+		// Floor for the response-start watch — without this, an old lastLoud
+		// timestamp from before our caller speak would trip "service idle"
+		// before the bot has had a chance to start responding.
 		let lastCallerActionAt = Date.now();
 
 		while (Date.now() < deadline) {
-			// Phase 1: wait for the service to START responding (or a hard
-			// timeout). Without this floor, the idle-watch below would exit
-			// immediately if the bot hasn't begun speaking yet — because
-			// lastInboundLoudAt is still the OLD value from before we spoke.
+			// Phase 1: wait for the service to start responding (or timeout).
 			const responseFloor = lastCallerActionAt;
-			const responseDeadline =
-				responseFloor + responseStartTimeoutMs;
+			const responseDeadline = responseFloor + responseStartTimeoutMs;
 			while (
 				Date.now() < deadline &&
 				lastInboundLoudAt <= responseFloor &&
@@ -225,8 +197,7 @@ export const runScenario = async (
 				await wait(150);
 			}
 
-			// Phase 2: wait until the service has been quiet long enough —
-			// that's our turn signal.
+			// Phase 2: wait until the service has been quiet long enough.
 			let idleStart = Math.max(Date.now(), lastInboundLoudAt);
 			while (Date.now() < deadline) {
 				if (lastInboundLoudAt > idleStart)
@@ -234,9 +205,7 @@ export const runScenario = async (
 				if (Date.now() - idleStart >= idleMs) break;
 				await wait(150);
 			}
-			// Phase 3: give STT a final-flush window. The bot just stopped
-			// transmitting; Deepgram still has ~300ms of endpointing latency
-			// before it emits the `final` event we need.
+			// Phase 3: STT final-flush window (~300ms endpointing).
 			await wait(400);
 			closeServiceTurn("idle");
 
@@ -263,11 +232,8 @@ export const runScenario = async (
 
 			if (action.type === "silence") {
 				log(`[caller] silence ${action.ms}ms`);
-				await caller.speakSilence(action.ms);
+				await transport.silence(action.ms);
 				lastCallerActionAt = Date.now();
-				// Count silence as a consumed turn too, otherwise a scripted
-				// scenario whose first probe is silence will loop forever
-				// (we'd ask the scenario for the same action every iteration).
 				callerTurnCount += 1;
 				continue;
 			}
@@ -283,8 +249,8 @@ export const runScenario = async (
 			const samples = await auraSpeak(action.text, {
 				...options.tts,
 				...(action.voice ? { model: action.voice } : {}),
-			});
-			await caller.speakPcm(samples);
+			}, { sampleRateHz: sampleRate });
+			await transport.speakPcm(samples);
 			lastCallerActionAt = Date.now();
 		}
 
@@ -295,7 +261,7 @@ export const runScenario = async (
 		log(`[caller] error: ${error.message}`);
 	} finally {
 		try {
-			if (caller) await caller.close();
+			await transport.close();
 		} catch {}
 		try {
 			await stt.finish();
@@ -311,7 +277,26 @@ export const runScenario = async (
 		error: error ? { message: error.message } : undefined,
 		scenario: options.scenario.id,
 		serviceTurns: serviceTurnCount,
-		streamSid: caller?.streamSid ?? "",
 		transcript,
+		transport: transport.id,
 	};
+};
+
+// Convenience wrapper: build a Twilio WS transport and runScenario in one
+// call, preserving the original entry point users wrote against.
+export type RunTwilioScenarioOptions = Omit<RunScenarioOptions, "transport"> &
+	TwilioWsTransportOptions;
+
+export const runTwilioScenario = (
+	options: RunTwilioScenarioOptions,
+): Promise<ScenarioReport> => {
+	const { scenario, tts, stt, log, ...transportOptions } = options;
+	const transport = twilioWsTransport(transportOptions);
+	return runScenario({
+		log,
+		scenario,
+		stt,
+		transport,
+		tts,
+	});
 };

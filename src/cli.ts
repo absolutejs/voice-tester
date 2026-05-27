@@ -1,18 +1,37 @@
 #!/usr/bin/env bun
-// Minimal CLI for one-shot regression checks. Run as:
+// Minimal CLI. Two modes:
+//
+// Twilio-WS (the dealroom phone receptionist style):
 //   bunx @absolutejs/voice-tester \
+//     --mode twilio-ws \
 //     --target wss://example.com/v1/voice/phone/stream \
+//     --scenario adversarial \
+//     --duration 90 \
+//     --session phone:+15555550100:$(date +%s)
+//
+// Discord voice (the Deal Referee style):
+//   DISCORD_TESTER_TOKEN=Bot.xxx bunx @absolutejs/voice-tester \
+//     --mode discord \
+//     --guild 1234567890 \
+//     --channel 9876543210 \
+//     --target-user 1122334455 \
 //     --scenario adversarial \
 //     --duration 90
 //
 // Environment:
-//   DEEPGRAM_API_KEY  — required for STT + Aura TTS
-//   ANTHROPIC_API_KEY — picked up by @absolutejs/ai
+//   DEEPGRAM_API_KEY       — required (STT + Aura TTS)
+//   ANTHROPIC_API_KEY      — picked up by @absolutejs/ai (LLM-driven scenarios)
+//   DISCORD_TESTER_TOKEN   — required for --mode discord
 
 import { runScenario } from "./aiCaller";
 import { adversarialScenario, happyPathScenario } from "./scenarios";
+import type { Transport } from "./transport";
+import { twilioWsTransport } from "./transports/twilioWs";
+
+type Mode = "twilio-ws" | "discord";
 
 type Args = {
+	mode?: Mode;
 	target?: string;
 	scenario?: "adversarial" | "happy-path";
 	durationMs?: number;
@@ -21,6 +40,10 @@ type Args = {
 	from?: string;
 	to?: string;
 	sessionId?: string;
+	guildId?: string;
+	channelId?: string;
+	targetUserId?: string;
+	discordToken?: string;
 };
 
 const parseArgs = (argv: string[]): Args => {
@@ -29,6 +52,10 @@ const parseArgs = (argv: string[]): Args => {
 		const flag = argv[i];
 		const value = argv[i + 1];
 		switch (flag) {
+			case "--mode":
+				args.mode = value === "discord" ? "discord" : "twilio-ws";
+				i += 1;
+				break;
 			case "--target":
 				args.target = value;
 				i += 1;
@@ -62,23 +89,76 @@ const parseArgs = (argv: string[]): Args => {
 				args.sessionId = value;
 				i += 1;
 				break;
+			case "--guild":
+				args.guildId = value;
+				i += 1;
+				break;
+			case "--channel":
+				args.channelId = value;
+				i += 1;
+				break;
+			case "--target-user":
+				args.targetUserId = value;
+				i += 1;
+				break;
+			case "--discord-token":
+				args.discordToken = value;
+				i += 1;
+				break;
 		}
 	}
 	return args;
 };
 
+const usage = `Usage:
+  voice-tester --mode twilio-ws --target wss://... [--scenario adversarial|happy-path] [--duration 90] [--session sessionId] [--from +E164] [--to +E164]
+  voice-tester --mode discord --guild <id> --channel <id> [--target-user <id>] [--scenario adversarial|happy-path] [--duration 90]
+
+Env: DEEPGRAM_API_KEY (required), ANTHROPIC_API_KEY (LLM scenarios), DISCORD_TESTER_TOKEN (discord mode).`;
+
 const main = async () => {
 	const args = parseArgs(process.argv.slice(2));
-	if (!args.target) {
-		console.error(
-			"Usage: voice-tester --target wss://... [--scenario adversarial|happy-path] [--duration 90] [--model ...]",
-		);
-		process.exit(1);
-	}
+	const mode = args.mode ?? "twilio-ws";
+
 	const deepgramKey = process.env.DEEPGRAM_API_KEY;
 	if (!deepgramKey) {
 		console.error("DEEPGRAM_API_KEY is required for STT + TTS");
 		process.exit(1);
+	}
+
+	let transport: Transport;
+	if (mode === "discord") {
+		const token = args.discordToken ?? process.env.DISCORD_TESTER_TOKEN;
+		if (!token || !args.guildId || !args.channelId) {
+			console.error(
+				"--mode discord requires DISCORD_TESTER_TOKEN (env or --discord-token), --guild, --channel",
+			);
+			console.error(usage);
+			process.exit(1);
+		}
+		// Dynamic import so the @discordjs/voice + discord.js peer deps stay
+		// optional — users on the Twilio path don't have to install them.
+		const { discordVoiceTransport } = await import("./transports/discord");
+		transport = await discordVoiceTransport({
+			channelId: args.channelId,
+			guildId: args.guildId,
+			...(args.targetUserId ? { targetUserId: args.targetUserId } : {}),
+			token,
+		});
+	} else {
+		if (!args.target) {
+			console.error("--mode twilio-ws requires --target wss://…");
+			console.error(usage);
+			process.exit(1);
+		}
+		transport = twilioWsTransport({
+			...(args.from ? { from: args.from } : {}),
+			...(args.to ? { to: args.to } : {}),
+			...(args.sessionId
+				? { customParameters: { sessionId: args.sessionId } }
+				: {}),
+			wsUrl: args.target,
+		});
 	}
 
 	const scenarioName = args.scenario ?? "adversarial";
@@ -86,25 +166,26 @@ const main = async () => {
 	const scenario =
 		scenarioName === "adversarial"
 			? adversarialScenario({
-					...(args.durationMs ? { maxDurationMs: args.durationMs } : {}),
+					...(args.durationMs
+						? { maxDurationMs: args.durationMs }
+						: {}),
 					llm: llmConfig,
 				})
 			: happyPathScenario({
-					...(args.durationMs ? { maxDurationMs: args.durationMs } : {}),
+					...(args.durationMs
+						? { maxDurationMs: args.durationMs }
+						: {}),
 					llm: llmConfig,
 				});
 
-	const customParameters: Record<string, string> = {};
-	if (args.sessionId) customParameters.sessionId = args.sessionId;
-
 	const report = await runScenario({
-		customParameters,
 		scenario,
 		stt: { apiKey: deepgramKey },
-		tts: { apiKey: deepgramKey, ...(args.voice ? { model: args.voice } : {}) },
-		wsUrl: args.target,
-		...(args.from ? { from: args.from } : {}),
-		...(args.to ? { to: args.to } : {}),
+		transport,
+		tts: {
+			apiKey: deepgramKey,
+			...(args.voice ? { model: args.voice } : {}),
+		},
 	});
 
 	console.info("\n=== SCENARIO REPORT ===");

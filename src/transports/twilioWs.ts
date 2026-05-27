@@ -1,40 +1,28 @@
-// Caller-side Twilio Media Stream simulator. Opens a WebSocket to a voice
-// service's `/stream` endpoint and emits the exact frames Twilio would: a
-// `connected` envelope, a `start` envelope carrying customParameters (so the
-// service routes to the right session), then a steady 20ms cadence of `media`
-// frames whenever the caller "speaks".
-//
-// The receiving service (e.g. @absolutejs/voice's twilio bridge) will reply
-// with `media`/`mark`/`clear` events; we expose those as a typed event stream
-// so the test runner can decode μ-law payloads back to PCM and pipe them into
-// STT.
+// Caller-side Twilio Media Stream transport. Speaks Twilio's WS protocol as
+// if we were the carrier dialing into a `@absolutejs/voice` (or any) bridge.
+// Sample rate is fixed at 8 kHz mono μ-law — telephony native.
 
 import {
 	decodeMulawBase64,
 	encodeMulawBase64,
 	frame20ms8k,
-} from "./mulaw";
+} from "../mulaw";
+import type { InboundAudioFrame, Transport } from "../transport";
 
-export type TwilioWsCallerOptions = {
+export type TwilioWsTransportOptions = {
 	/** `wss://...` URL of the service's Media Stream endpoint. */
 	wsUrl: string;
-	/** Caller's phone number (E.164). Surfaces in `start.start.callSid` etc. */
-	from?: string;
-	/** Service number being dialed (E.164). */
-	to?: string;
-	/** Custom parameters merged into `start.start.customParameters`. */
+	/** `customParameters` merged into the Twilio `start` envelope (e.g. sessionId). */
 	customParameters?: Record<string, string>;
+	/** Caller phone (E.164). */
+	from?: string;
+	/** Service phone (E.164). */
+	to?: string;
 	/** Override the simulated streamSid (default: random `MZ…`). */
 	streamSid?: string;
 	/** Override the simulated callSid (default: random `CA…`). */
 	callSid?: string;
 };
-
-export type TwilioInboundFrame =
-	| { type: "media"; pcm: Int16Array; receivedAt: number }
-	| { type: "clear"; receivedAt: number }
-	| { type: "mark"; name: string; receivedAt: number }
-	| { type: "raw"; raw: string };
 
 const FRAME_INTERVAL_MS = 20;
 const SAMPLES_PER_FRAME = 160;
@@ -46,36 +34,19 @@ const randomSid = (prefix: string) => {
 	return `${prefix}${hex}`;
 };
 
-export type TwilioWsCaller = {
-	/** Wait until the WS is open + the start envelope was sent. */
-	ready: Promise<void>;
-	/** Send 16-bit PCM @ 8 kHz; framed into 20 ms μ-law packets paced in real time. */
-	speakPcm: (samples: Int16Array) => Promise<void>;
-	/** Pad the line with silence frames for the given duration (preserves cadence). */
-	speakSilence: (ms: number) => Promise<void>;
-	/** Subscribe to inbound frames from the service. */
-	onFrame: (handler: (frame: TwilioInboundFrame) => void) => () => void;
-	/** Hang up — sends a stop envelope + closes the WS. */
-	close: () => Promise<void>;
-	/** Active stream SID. */
-	streamSid: string;
-};
-
 /**
- * Spin up a caller-side Twilio Media Stream connection. Throws on connect
- * failure; returns a controller with paced `speakPcm` + inbound-frame
- * subscription.
+ * Open a Twilio Media Stream as the caller side. Throws on connect failure.
  */
-export const startTwilioWsCaller = (
-	options: TwilioWsCallerOptions,
-): TwilioWsCaller => {
+export const twilioWsTransport = (
+	options: TwilioWsTransportOptions,
+): Transport => {
 	const streamSid = options.streamSid ?? randomSid("MZ");
 	const callSid = options.callSid ?? randomSid("CA");
 	const ws = new WebSocket(options.wsUrl);
 	ws.binaryType = "arraybuffer";
 
-	const inboundHandlers = new Set<(frame: TwilioInboundFrame) => void>();
-	const emit = (frame: TwilioInboundFrame) => {
+	const inboundHandlers = new Set<(frame: InboundAudioFrame) => void>();
+	const emit = (frame: InboundAudioFrame) => {
 		for (const handler of inboundHandlers) handler(frame);
 	};
 
@@ -203,6 +174,7 @@ export const startTwilioWsCaller = (
 				ws.close(1000, "voice-tester hangup");
 			}
 		},
+		id: streamSid,
 		onFrame: (handler) => {
 			inboundHandlers.add(handler);
 			return () => {
@@ -210,17 +182,17 @@ export const startTwilioWsCaller = (
 			};
 		},
 		ready,
-		speakPcm: async (samples) => {
-			await ready;
-			await sendFramesPaced(frame20ms8k(samples));
-		},
-		speakSilence: async (ms) => {
+		sampleRateHz: 8000,
+		silence: async (ms) => {
 			await ready;
 			const frameCount = Math.ceil(ms / FRAME_INTERVAL_MS);
 			const silence = new Int16Array(SAMPLES_PER_FRAME);
 			const frames = Array.from({ length: frameCount }, () => silence);
 			await sendFramesPaced(frames);
 		},
-		streamSid,
+		speakPcm: async (samples) => {
+			await ready;
+			await sendFramesPaced(frame20ms8k(samples));
+		},
 	};
 };
