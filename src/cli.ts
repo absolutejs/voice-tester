@@ -28,7 +28,7 @@ import { adversarialScenario, happyPathScenario } from "./scenarios";
 import type { Transport } from "./transport";
 import { twilioWsTransport } from "./transports/twilioWs";
 
-type Mode = "twilio-ws" | "discord";
+type Mode = "twilio-ws" | "twilio-outbound" | "discord";
 
 type Args = {
 	mode?: Mode;
@@ -44,6 +44,9 @@ type Args = {
 	channelId?: string;
 	targetUserId?: string;
 	discordToken?: string;
+	publicUrl?: string;
+	port?: number;
+	recordCall?: boolean;
 };
 
 const parseArgs = (argv: string[]): Args => {
@@ -53,7 +56,12 @@ const parseArgs = (argv: string[]): Args => {
 		const value = argv[i + 1];
 		switch (flag) {
 			case "--mode":
-				args.mode = value === "discord" ? "discord" : "twilio-ws";
+				args.mode =
+					value === "discord"
+						? "discord"
+						: value === "twilio-outbound"
+							? "twilio-outbound"
+							: "twilio-ws";
 				i += 1;
 				break;
 			case "--target":
@@ -105,16 +113,46 @@ const parseArgs = (argv: string[]): Args => {
 				args.discordToken = value;
 				i += 1;
 				break;
+			case "--public-url":
+				args.publicUrl = value;
+				i += 1;
+				break;
+			case "--port":
+				args.port = Number(value);
+				i += 1;
+				break;
+			case "--record-call":
+				args.recordCall = true;
+				// flag, no value
+				break;
 		}
 	}
 	return args;
 };
 
 const usage = `Usage:
-  voice-tester --mode twilio-ws --target wss://... [--scenario adversarial|happy-path] [--duration 90] [--session sessionId] [--from +E164] [--to +E164]
-  voice-tester --mode discord --guild <id> --channel <id> [--target-user <id>] [--scenario adversarial|happy-path] [--duration 90]
+  voice-tester --mode twilio-ws       --target wss://... [--scenario adversarial|happy-path] [--duration 90] [--session sessionId] [--from +E164] [--to +E164]
+  voice-tester --mode twilio-outbound --from +E164 --to +E164 --public-url https://... [--port 3344] [--record-call] [--scenario ...] [--duration ...]
+  voice-tester --mode discord         --guild <id> --channel <id> [--target-user <id>] [--scenario ...] [--duration ...]
 
-Env: DEEPGRAM_API_KEY (required), ANTHROPIC_API_KEY (LLM scenarios), DISCORD_TESTER_TOKEN (discord mode).`;
+Env:
+  DEEPGRAM_API_KEY     (required for STT + TTS)
+  ANTHROPIC_API_KEY    (LLM-driven scenarios)
+  TWILIO_ACCOUNT_SID   (twilio-outbound mode)
+  TWILIO_AUTH_TOKEN    (twilio-outbound mode)
+  DISCORD_TESTER_TOKEN (discord mode)
+
+twilio-outbound setup:
+  1. Have a Twilio account + a voice-capable number you own (--from).
+  2. Expose a public HTTPS URL that proxies to your local --port (default
+     3344). Easiest: 'ngrok http 3344' → use the https URL ngrok prints as
+     --public-url. AbsoluteJS users can run the built-in tunnel instead.
+  3. Set TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN env vars.
+  4. Run: voice-tester --mode twilio-outbound --from +15551234567 \\
+       --to +19735551212 --public-url https://abc.ngrok.io
+  Twilio will dial the --to number; once they answer, the scenario engine
+  drives the call. Cost is the standard Twilio outbound rate (~$0.014/min
+  US-to-US).`;
 
 const main = async () => {
 	const args = parseArgs(process.argv.slice(2));
@@ -145,6 +183,42 @@ const main = async () => {
 			...(args.targetUserId ? { targetUserId: args.targetUserId } : {}),
 			token,
 		});
+	} else if (mode === "twilio-outbound") {
+		const accountSid = process.env.TWILIO_ACCOUNT_SID;
+		const authToken = process.env.TWILIO_AUTH_TOKEN;
+		if (!accountSid || !authToken) {
+			console.error(
+				"--mode twilio-outbound requires TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN env vars",
+			);
+			console.error(usage);
+			process.exit(1);
+		}
+		if (!args.from || !args.to || !args.publicUrl) {
+			console.error(
+				"--mode twilio-outbound requires --from <E164>, --to <E164>, and --public-url <https://…>",
+			);
+			console.error(usage);
+			process.exit(1);
+		}
+		const { twilioOutboundTransport } = await import(
+			"./transports/twilioOutbound"
+		);
+		console.info(
+			`[outbound] originating call from ${args.from} to ${args.to} via Twilio…`,
+		);
+		console.info(
+			`[outbound] local server on port ${args.port ?? 3344}, public URL ${args.publicUrl}`,
+		);
+		transport = await twilioOutboundTransport({
+			accountSid,
+			authToken,
+			from: args.from,
+			...(args.port ? { port: args.port } : {}),
+			publicUrl: args.publicUrl,
+			...(args.recordCall ? { recordCall: true } : {}),
+			to: args.to,
+		});
+		console.info("[outbound] call connected; running scenario…");
 	} else {
 		if (!args.target) {
 			console.error("--mode twilio-ws requires --target wss://…");
