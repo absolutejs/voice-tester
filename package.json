@@ -1,9 +1,9 @@
 {
 	"name": "@absolutejs/voice-tester",
-	"version": "0.0.4-beta.1",
+	"version": "0.0.4-beta.2",
+  "license": "MIT",
 	"description": "AI-driven automated tester for @absolutejs/voice services — simulates a caller end-to-end (Twilio Media Stream protocol or real Twilio outbound), drives the conversation with TTS + STT + LLM. Built for the AbsoluteJS AI Studio.",
 	"author": "Alex Kahn",
-	"license": "MIT",
 	"type": "module",
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
@@ -22,6 +22,10 @@
 		"./discord": {
 			"types": "./dist/discord.d.ts",
 			"import": "./dist/discord.js"
+		},
+		"./google-meet": {
+			"types": "./dist/googleMeet.d.ts",
+			"import": "./dist/googleMeet.js"
 		}
 	},
 	"files": [
@@ -30,7 +34,7 @@
 		"README.md"
 	],
 	"scripts": {
-		"build": "rm -rf dist && bun build src/index.ts src/cli.ts src/scenarios/index.ts src/discord.ts --outdir dist --target node --format esm --external '@absolutejs/*' --external 'discord.js' --external '@discordjs/*' --external 'prism-media' && bun x tsc -p tsconfig.json --emitDeclarationOnly --outDir dist",
+		"build": "rm -rf dist && bun build src/index.ts src/cli.ts src/scenarios/index.ts src/discord.ts src/googleMeet.ts --outdir dist --target node --format esm --external '@absolutejs/*' --external 'discord.js' --external '@discordjs/*' --external 'prism-media' --external 'playwright' && bun x tsc -p tsconfig.json --emitDeclarationOnly --outDir dist",
 		"typecheck": "bun x tsc -p tsconfig.json --noEmit",
 		"prepublishOnly": "bun run build"
 	},
@@ -47,6 +51,7 @@
 		"@absolutejs/ai": "*",
 		"@discordjs/voice": ">=0.17.0",
 		"discord.js": ">=14.0.0",
+		"playwright": ">=1.40.0",
 		"prism-media": "^1.3.5"
 	},
 	"peerDependenciesMeta": {
@@ -54,6 +59,9 @@
 			"optional": true
 		},
 		"discord.js": {
+			"optional": true
+		},
+		"playwright": {
 			"optional": true
 		},
 		"prism-media": {
