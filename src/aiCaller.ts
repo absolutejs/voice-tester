@@ -251,6 +251,10 @@ export const runScenario = async (
 				...(action.voice ? { model: action.voice } : {}),
 			}, { sampleRateHz: sampleRate });
 			await transport.speakPcm(samples);
+			// Twilio keeps sending quiet media frames after a person stops talking.
+			// Mirror that here so server-side silence turn detectors can commit
+			// the caller turn before the scripted caller advances.
+			await transport.silence(2800);
 			lastCallerActionAt = Date.now();
 		}
 

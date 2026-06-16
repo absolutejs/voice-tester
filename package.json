@@ -1,6 +1,10 @@
 {
 	"name": "@absolutejs/voice-tester",
-	"version": "0.0.4-beta.2",
+	"version": "0.0.4-beta.4",
+	"homepage": "https://github.com/absolutejs/voice-tester",
+	"bugs": {
+		"url": "https://github.com/absolutejs/voice-tester/issues"
+	},
   "license": "MIT",
 	"description": "AI-driven automated tester for @absolutejs/voice services — simulates a caller end-to-end (Twilio Media Stream protocol or real Twilio outbound), drives the conversation with TTS + STT + LLM. Built for the AbsoluteJS AI Studio.",
 	"author": "Alex Kahn",
