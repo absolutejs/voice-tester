@@ -95,6 +95,39 @@ export type ScenarioReport = {
 	durationMs: number;
 	endedReason: "scenario_hangup" | "timeout" | "transport_closed" | "error";
 	error?: { message: string };
+	/** Content-integrity of the audio the CALLER heard (STT of the service's
+	 *  speech). `duplicateServiceTurns` > 0 means the service repeated an
+	 *  utterance verbatim back-to-back — the "repeated the last statement twice" /
+	 *  overlapping-audio garble as actually heard over the wire. */
+	audioIntegrity: {
+		serviceTurns: number;
+		duplicateServiceTurns: number;
+		mediaFrames: number;
+		ok: boolean;
+	};
+};
+
+// Count service utterances that repeat the immediately-preceding one verbatim
+// (normalized) — the audible "repeated twice" / overlapping-speech symptom.
+const normalizeHeard = (text: string) =>
+	text
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, " ")
+		.trim();
+
+const countDuplicateServiceTurns = (turns: ConversationTurn[]) => {
+	const heard = turns
+		.filter((turn) => turn.speaker === "service")
+		.map((turn) => normalizeHeard(turn.text))
+		.filter((text) => text.length >= 8);
+	let duplicates = 0;
+	for (let index = 1; index < heard.length; index += 1) {
+		if (heard[index] === heard[index - 1]) {
+			duplicates += 1;
+		}
+	}
+
+	return duplicates;
 };
 
 const SILENCE_THRESHOLD = 200; // PCM samples below this count as silence
@@ -274,7 +307,15 @@ export const runScenario = async (
 
 	closeServiceTurn("idle");
 
+	const duplicateServiceTurns = countDuplicateServiceTurns(transcript);
+
 	return {
+		audioIntegrity: {
+			duplicateServiceTurns,
+			mediaFrames: mediaFrameCount,
+			ok: duplicateServiceTurns === 0,
+			serviceTurns: serviceTurnCount,
+		},
 		callerTurns: callerTurnCount,
 		durationMs: Date.now() - startedAt,
 		endedReason,
