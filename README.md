@@ -3,7 +3,7 @@
 AI-driven automated tester for voice services that speak the Twilio Media
 Streams protocol. Pairs with [`@absolutejs/voice`](https://npmjs.com/package/@absolutejs/voice) — drives a regression scenario end-to-end against a deployed receptionist without a phone, a real Twilio call, or a human in the loop.
 
-Built for the AbsoluteJS AI Studio.
+Built for voice workflows on the hosted AbsoluteJS.ai platform and usable as a standalone test package.
 
 ## What it does
 
@@ -62,21 +62,23 @@ Exits non-zero if the scenario hit an error. Prints a JSON report:
 ## Quick start (API)
 
 ```ts
-import { runScenario } from "@absolutejs/voice-tester";
-import { adversarialScenario } from "@absolutejs/voice-tester/scenarios";
+import { runScenario } from '@absolutejs/voice-tester';
+import { adversarialScenario } from '@absolutejs/voice-tester/scenarios';
 
 const report = await runScenario({
-  wsUrl: "wss://example.com/v1/voice/phone/stream",
-  tts: { apiKey: process.env.DEEPGRAM_API_KEY! },
-  stt: { apiKey: process.env.DEEPGRAM_API_KEY! },
-  scenario: adversarialScenario({ llm: { model: "claude-haiku-4-5-20251001" } }),
-  customParameters: { sessionId: `phone:+15555550100:${Date.now()}` },
-  from: "+15555550100",
-  to: "+15555550199",
+	wsUrl: 'wss://example.com/v1/voice/phone/stream',
+	tts: { apiKey: process.env.DEEPGRAM_API_KEY! },
+	stt: { apiKey: process.env.DEEPGRAM_API_KEY! },
+	scenario: adversarialScenario({
+		llm: { model: 'claude-haiku-4-5-20251001' }
+	}),
+	customParameters: { sessionId: `phone:+15555550100:${Date.now()}` },
+	from: '+15555550100',
+	to: '+15555550199'
 });
 
-if (report.endedReason === "error") {
-  throw new Error(report.error?.message ?? "scenario failed");
+if (report.endedReason === 'error') {
+	throw new Error(report.error?.message ?? 'scenario failed');
 }
 ```
 
@@ -90,19 +92,19 @@ if (report.endedReason === "error") {
 A scenario is a `decide` function that receives the rolling context and returns the next caller action:
 
 ```ts
-import type { Scenario } from "@absolutejs/voice-tester";
+import type { Scenario } from '@absolutejs/voice-tester';
 
 export const myScenario: Scenario = {
-  id: "my-scenario",
-  maxDurationMs: 60_000,
-  idleMs: 1200,
-  decide: async ({ transcript, lastServiceUtterance, callerTurnCount }) => {
-    if (callerTurnCount >= 5) return { type: "hangup" };
-    if (lastServiceUtterance?.toLowerCase().includes("price")) {
-      return { type: "speak", text: "Is there a free trial?" };
-    }
-    return { type: "speak", text: "Tell me more." };
-  },
+	id: 'my-scenario',
+	maxDurationMs: 60_000,
+	idleMs: 1200,
+	decide: async ({ transcript, lastServiceUtterance, callerTurnCount }) => {
+		if (callerTurnCount >= 5) return { type: 'hangup' };
+		if (lastServiceUtterance?.toLowerCase().includes('price')) {
+			return { type: 'speak', text: 'Is there a free trial?' };
+		}
+		return { type: 'speak', text: 'Tell me more.' };
+	}
 };
 ```
 
@@ -131,22 +133,22 @@ DISCORD_TESTER_TOKEN=Bot.your_tester_bot_token bunx @absolutejs/voice-tester \
 `--target-user` is optional — if set, the tester only transcribes that user's audio (useful when there are humans in the channel too). Without it, everyone except the tester bot itself is forwarded to STT.
 
 ```ts
-import { runScenario } from "@absolutejs/voice-tester";
-import { adversarialScenario } from "@absolutejs/voice-tester/scenarios";
-import { discordVoiceTransport } from "@absolutejs/voice-tester/discord";
+import { runScenario } from '@absolutejs/voice-tester';
+import { adversarialScenario } from '@absolutejs/voice-tester/scenarios';
+import { discordVoiceTransport } from '@absolutejs/voice-tester/discord';
 
 const transport = await discordVoiceTransport({
-  token: process.env.DISCORD_TESTER_TOKEN!,
-  guildId: "1234567890",
-  channelId: "9876543210",
-  targetUserId: "1122334455", // optional: only this user's audio
+	token: process.env.DISCORD_TESTER_TOKEN!,
+	guildId: '1234567890',
+	channelId: '9876543210',
+	targetUserId: '1122334455' // optional: only this user's audio
 });
 
 const report = await runScenario({
-  transport,
-  scenario: adversarialScenario({ llm: {} }),
-  tts: { apiKey: process.env.DEEPGRAM_API_KEY! },
-  stt: { apiKey: process.env.DEEPGRAM_API_KEY! },
+	transport,
+	scenario: adversarialScenario({ llm: {} }),
+	tts: { apiKey: process.env.DEEPGRAM_API_KEY! },
+	stt: { apiKey: process.env.DEEPGRAM_API_KEY! }
 });
 ```
 
