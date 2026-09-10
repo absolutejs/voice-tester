@@ -42,7 +42,7 @@
 	"scripts": {
 		"build": "rm -rf dist && bun build src/index.ts src/cli.ts src/scenarios/index.ts src/discord.ts src/googleMeet.ts --outdir dist --target node --format esm --external '@absolutejs/*' --external 'discord.js' --external '@discordjs/*' --external 'prism-media' --external 'playwright' && bun x tsc -p tsconfig.json --emitDeclarationOnly --outDir dist",
 		"typecheck": "bun x tsc -p tsconfig.json --noEmit",
-		"prepublishOnly": "bun run build && absolute-changelog check",
+		"prepublishOnly": "bun run check:package",
 		"check:package": "absolute-changelog check"
 	},
 	"keywords": [
@@ -77,7 +77,7 @@
 	},
 	"devDependencies": {
 		"@absolutejs/ai": "*",
-		"@absolutejs/changelog": "^0.5.1",
+		"@absolutejs/changelog": "^0.6.0",
 		"@discordjs/voice": "^0.19",
 		"@types/bun": "latest",
 		"discord.js": "^14.16.3",
