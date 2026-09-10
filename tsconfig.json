@@ -3,7 +3,10 @@
 		"target": "ESNext",
 		"module": "ESNext",
 		"moduleResolution": "Bundler",
-		"lib": ["ESNext", "DOM"],
+		"lib": [
+			"ESNext",
+			"DOM"
+		],
 		"strict": true,
 		"esModuleInterop": true,
 		"skipLibCheck": true,
@@ -11,8 +14,13 @@
 		"declarationMap": true,
 		"resolveJsonModule": true,
 		"isolatedModules": true,
-		"types": ["bun"],
+		"types": [
+			"bun"
+		],
 		"outDir": "./dist"
 	},
-	"include": ["src/**/*.ts"]
+	"include": [
+		"src/**/*.ts",
+		"changelog/**/*"
+	]
 }
