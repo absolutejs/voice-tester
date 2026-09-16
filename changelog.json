@@ -1,5 +1,26 @@
 {
 	"contract": 1,
 	"name": "@absolutejs/voice-tester",
-	"releases": []
+	"releases": [
+		{
+			"changes": [
+				{
+					"kind": "added",
+					"summary": "Expose an optional closed promise on transports; the Twilio WebSocket transport reports socket closure.",
+					"symbols": [
+						"twilioWsTransport"
+					]
+				},
+				{
+					"kind": "fixed",
+					"summary": "Observe transport closure during waits, decisions and speech, preserving the actual ending reason and duration.",
+					"symbols": [
+						"runScenario"
+					]
+				}
+			],
+			"date": "2026-09-16",
+			"version": "0.0.4-beta.6"
+		}
+	]
 }

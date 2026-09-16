@@ -192,3 +192,12 @@ bun add -d @discordjs/voice discord.js prism-media
 ## License
 
 MIT
+
+### Transport closure
+
+Custom transports should expose `closed: Promise<void>` and resolve it on socket
+closure, even before `ready`. The caller then ends with `transport_closed`, stops
+waiting for replies or decisions, aborts caller TTS, and releases frame listeners.
+An in-flight custom decision can finish later, but its action is never sent after
+closure. The normal scenario hangup retains `scenario_hangup`; report duration
+ends before cleanup. Existing transports without `closed` remain supported.

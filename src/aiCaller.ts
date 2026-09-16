@@ -156,6 +156,37 @@ export const runScenario = async (
 
 	const transport = options.transport;
 	const sampleRate = transport.sampleRateHz;
+	const closedError = new Error("Voice test transport closed");
+	const controller = new AbortController();
+	let endedAt: number | undefined;
+	let offFrame: (() => void) | undefined;
+	const closed = transport.closed?.then(() => {
+		if (endedAt !== undefined) return;
+		endedAt = Date.now();
+		controller.abort(closedError);
+	});
+	const untilClosed = async <T>(
+		operation: () => PromiseLike<T> | T,
+	): Promise<T> => {
+		controller.signal.throwIfAborted();
+		if (!closed) return operation();
+		let onAbort: () => void = () => {};
+		const interrupted = new Promise<never>((_resolve, reject) => {
+			onAbort = () => reject(closedError);
+			controller.signal.addEventListener("abort", onAbort, { once: true });
+		});
+		try {
+			return await Promise.race([
+				Promise.resolve().then(() => {
+					controller.signal.throwIfAborted();
+					return operation();
+				}),
+				interrupted,
+			]);
+		} finally {
+			controller.signal.removeEventListener("abort", onAbort);
+		}
+	};
 
 	const stt = openDeepgramStt({ ...options.stt, sampleRateHz: sampleRate });
 	stt.on("open", () => log(`[stt] open (rate=${sampleRate}Hz)`));
@@ -185,7 +216,7 @@ export const runScenario = async (
 	};
 
 	try {
-		const offFrame = transport.onFrame((frame: InboundAudioFrame) => {
+		offFrame = transport.onFrame((frame: InboundAudioFrame) => {
 			if (frame.type === "media") {
 				mediaFrameCount += 1;
 				if (isLoudFrame(frame.pcm)) lastInboundLoudAt = Date.now();
@@ -204,14 +235,26 @@ export const runScenario = async (
 			}
 		});
 
-		await transport.ready;
+		await untilClosed(() => transport.ready);
 		log(`[caller] transport=${transport.id} ready (rate=${sampleRate}Hz)`);
 
 		const idleMs = options.scenario.idleMs ?? 1500;
 		const responseStartTimeoutMs =
 			options.scenario.responseStartTimeoutMs ?? 8000;
 		const deadline = Date.now() + options.scenario.maxDurationMs;
-		const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+		const wait = async (ms: number) => {
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			try {
+				await untilClosed(
+					() =>
+						new Promise<void>((resolve) => {
+							timer = setTimeout(resolve, ms);
+						}),
+				);
+			} finally {
+				clearTimeout(timer);
+			}
+		};
 
 		// Floor for the response-start watch — without this, an old lastLoud
 		// timestamp from before our caller speak would trip "service idle"
@@ -233,8 +276,7 @@ export const runScenario = async (
 			// Phase 2: wait until the service has been quiet long enough.
 			let idleStart = Math.max(Date.now(), lastInboundLoudAt);
 			while (Date.now() < deadline) {
-				if (lastInboundLoudAt > idleStart)
-					idleStart = lastInboundLoudAt;
+				if (lastInboundLoudAt > idleStart) idleStart = lastInboundLoudAt;
 				if (Date.now() - idleStart >= idleMs) break;
 				await wait(150);
 			}
@@ -247,15 +289,17 @@ export const runScenario = async (
 				break;
 			}
 
-			const action = await options.scenario.decide({
-				callerTurnCount,
-				elapsedMs: Date.now() - startedAt,
-				lastServiceUtterance:
-					transcript[transcript.length - 1]?.speaker === "service"
-						? (transcript[transcript.length - 1]?.text ?? null)
-						: null,
-				transcript: [...transcript],
-			});
+			const action = await untilClosed(() =>
+				options.scenario.decide({
+					callerTurnCount,
+					elapsedMs: Date.now() - startedAt,
+					lastServiceUtterance:
+						transcript[transcript.length - 1]?.speaker === "service"
+							? (transcript[transcript.length - 1]?.text ?? null)
+							: null,
+					transcript: [...transcript],
+				}),
+			);
 
 			if (action.type === "hangup") {
 				log(`[caller] hangup (${action.reason ?? "scenario"})`);
@@ -265,7 +309,7 @@ export const runScenario = async (
 
 			if (action.type === "silence") {
 				log(`[caller] silence ${action.ms}ms`);
-				await transport.silence(action.ms);
+				await untilClosed(() => transport.silence(action.ms));
 				lastCallerActionAt = Date.now();
 				callerTurnCount += 1;
 				continue;
@@ -279,24 +323,34 @@ export const runScenario = async (
 			});
 			log(`[caller:say] ${action.text}`);
 
-			const samples = await auraSpeak(action.text, {
-				...options.tts,
-				...(action.voice ? { model: action.voice } : {}),
-			}, { sampleRateHz: sampleRate });
-			await transport.speakPcm(samples);
+			const samples = await untilClosed(() =>
+				auraSpeak(
+					action.text,
+					{
+						...options.tts,
+						...(action.voice ? { model: action.voice } : {}),
+					},
+					{ sampleRateHz: sampleRate, signal: controller.signal },
+				),
+			);
+			await untilClosed(() => transport.speakPcm(samples));
 			// Twilio keeps sending quiet media frames after a person stops talking.
 			// Mirror that here so server-side silence turn detectors can commit
 			// the caller turn before the scripted caller advances.
-			await transport.silence(2800);
+			await untilClosed(() => transport.silence(2800));
 			lastCallerActionAt = Date.now();
 		}
-
-		offFrame();
 	} catch (err) {
-		error = err instanceof Error ? err : new Error(String(err));
-		endedReason = "error";
-		log(`[caller] error: ${error.message}`);
+		if (err === closedError) {
+			endedReason = "transport_closed";
+		} else {
+			error = err instanceof Error ? err : new Error(String(err));
+			endedReason = "error";
+			log(`[caller] error: ${error.message}`);
+		}
 	} finally {
+		endedAt ??= Date.now();
+		offFrame?.();
 		try {
 			await transport.close();
 		} catch {}
@@ -317,7 +371,7 @@ export const runScenario = async (
 			serviceTurns: serviceTurnCount,
 		},
 		callerTurns: callerTurnCount,
-		durationMs: Date.now() - startedAt,
+		durationMs: endedAt - startedAt,
 		endedReason,
 		error: error ? { message: error.message } : undefined,
 		scenario: options.scenario.id,

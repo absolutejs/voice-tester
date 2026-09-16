@@ -2,11 +2,7 @@
 // if we were the carrier dialing into a `@absolutejs/voice` (or any) bridge.
 // Sample rate is fixed at 8 kHz mono μ-law — telephony native.
 
-import {
-	decodeMulawBase64,
-	encodeMulawBase64,
-	frame20ms8k,
-} from "../mulaw";
+import { decodeMulawBase64, encodeMulawBase64, frame20ms8k } from "../mulaw";
 import type { InboundAudioFrame, Transport } from "../transport";
 
 export type TwilioWsTransportOptions = {
@@ -45,6 +41,9 @@ export const twilioWsTransport = (
 	const ws = new WebSocket(options.wsUrl);
 	ws.binaryType = "arraybuffer";
 
+	const closed = new Promise<void>((resolve) => {
+		ws.addEventListener("close", () => resolve(), { once: true });
+	});
 	const inboundHandlers = new Set<(frame: InboundAudioFrame) => void>();
 	const emit = (frame: InboundAudioFrame) => {
 		for (const handler of inboundHandlers) handler(frame);
@@ -182,6 +181,7 @@ export const twilioWsTransport = (
 			};
 		},
 		ready,
+		closed,
 		sampleRateHz: 8000,
 		silence: async (ms) => {
 			await ready;

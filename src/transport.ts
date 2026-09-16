@@ -25,6 +25,8 @@ export type Transport = {
 	sampleRateHz: number;
 	/** Resolves when media exchange is possible (post-handshake). */
 	ready: Promise<void>;
+	/** Resolves when the transport closes, including closure before ready. */
+	closed?: Promise<void>;
 	/** Send mono 16-bit PCM at `sampleRateHz`. Paced internally where required. */
 	speakPcm: (samples: Int16Array) => Promise<void>;
 	/**
