@@ -8,6 +8,7 @@
 					"kind": "added",
 					"summary": "Expose an optional closed promise on transports; the Twilio WebSocket transport reports socket closure.",
 					"symbols": [
+						"Transport",
 						"twilioWsTransport"
 					]
 				},
