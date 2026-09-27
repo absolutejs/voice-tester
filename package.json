@@ -7,6 +7,10 @@
 	},
 	"license": "MIT",
 	"description": "AI-driven automated tester for @absolutejs/voice services with Twilio, Discord, and Google Meet transports, TTS, STT, LLM callers, scenarios, and reports.",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/absolutejs/voice-tester.git"
+	},
 	"author": "Alex Kahn",
 	"type": "module",
 	"main": "./dist/index.js",
