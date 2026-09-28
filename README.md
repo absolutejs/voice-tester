@@ -158,6 +158,48 @@ Discord mode pulls three peer dependencies which are not installed by default â€
 bun add -d @discordjs/voice discord.js prism-media
 ```
 
+### Google Meet mode
+
+`@absolutejs/voice-tester/google-meet` joins a Meet call through Playwright as
+a participant with a microphone the tester controls and ears on everyone else,
+so you can drive a meeting bot by voice with no human in the call.
+
+```ts
+import { chromium } from "playwright";
+import { startGoogleMeet } from "@absolutejs/voice-tester/google-meet";
+
+const meet = await startGoogleMeet({
+	chromium,
+	channel: "chrome",
+	// A kept Chrome profile with a Google account signed in (see below).
+	userDataDir: `${process.env.HOME}/.config/voice-tester-profile`,
+	tts: { apiKey: process.env.DEEPGRAM_API_KEY!, model: "aura-2-orion-en" },
+});
+await meet.waitUntilInCall();
+console.log("Meeting:", meet.page.url()); // invite your bot here
+await meet.admit({ who: /my bot/i, timeoutMs: 300_000 });
+
+const said = await meet.say("Hey bot, what's on my calendar today?");
+const reply = await meet.hear({ after: said.endedAt, quietMs: 4000 });
+console.log(reply.text, "first words after", reply.startedAt - said.endedAt, "ms");
+await meet.close();
+```
+
+- `say(text)` speaks with Deepgram Aura into the call and resolves when it has
+  played. `hear({ after, quietMs })` waits for someone else to talk, until
+  they've been quiet for `quietMs` (pauses between a bot's clips count as one
+  reply if shorter), and transcribes it. Timestamps are epoch ms.
+- `admit()` lets people in from the waiting room when the tester hosts.
+- **Sign-in.** Meet turns away guests in automated browsers ("You can't join
+  this video call"), and Google blocks sign-in inside a Playwright-controlled
+  window ("This browser or app may not be secure"). Sign the account in once
+  with a plain Chrome on the profile directory, then close it:
+  `google-chrome --user-data-dir=$HOME/.config/voice-tester-profile`. Every
+  run after that joins signed in. Without a signed-in account the tester joins
+  as a guest and throws a clear error if Meet refuses it.
+- A browser you pass in must be launched with `googleMeetChromeArgs` (fake
+  media devices, no permission prompts, autoplay).
+
 ## Architecture
 
 ```
