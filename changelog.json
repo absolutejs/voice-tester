@@ -6,6 +6,27 @@
 			"changes": [
 				{
 					"kind": "added",
+					"summary": "Google Meet mode can speak and listen: say() plays Aura speech into the call through a microphone the tester controls, hear() waits for others to talk and transcribes it with timings, admit() lets people in when the tester hosts, userDataDir keeps a signed-in Chrome profile between runs, and a refused guest join now throws a clear error.",
+					"symbols": [
+						"startGoogleMeet",
+						"StartGoogleMeetOptions",
+						"GoogleMeetSession",
+						"HeardSpeech",
+						"googleMeetChromeArgs"
+					]
+				},
+				{
+					"kind": "fixed",
+					"summary": "Joining Meet no longer crashes when the page reloads mid-join, answers the \"Do you want people to see you?\" camera prompt, and a kept profile that reopens its last tabs launches instead of failing to resize them."
+				}
+			],
+			"date": "2026-09-28",
+			"version": "0.0.4-beta.7"
+		},
+		{
+			"changes": [
+				{
+					"kind": "added",
 					"summary": "Expose an optional closed promise on transports; the Twilio WebSocket transport reports socket closure.",
 					"symbols": [
 						"Transport",
